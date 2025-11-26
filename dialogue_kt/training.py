@@ -1,10 +1,12 @@
 import json
+from collections import Counter
 from tqdm import tqdm
 import torch
 import transformers
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support
+from scipy.stats import pearsonr
 from pykt.models.dkt import DKT
 from pykt.models.akt import AKT
 from pykt.models.dkvmn import DKVMN
@@ -17,7 +19,7 @@ from dialogue_kt.models.dkt_multi_kc import DKTMultiKC
 from dialogue_kt.models.dkt_sem import DKTSem
 from dialogue_kt.models.simplekt import simpleKT
 from dialogue_kt.data_loading import (load_annotated_data, get_kc_result_filename, get_qual_result_filename, get_default_fold, load_kc_dict,
-                          correct_to_str, standards_to_str, get_model_file_suffix, COMTA_SUBJECTS)
+                          correct_to_str, standards_to_str, get_model_file_suffix, COMTA_SUBJECTS, AUSTRALIA_MAX_SCORE)
 from dialogue_kt.kt_data_loading import (LMKTDatasetUnpacked, LMKTCollatorUnpacked, LMKTDatasetPacked, LMKTCollatorPacked,
                              DKTDataset, DKTCollator, get_dataloader, apply_annotations)
 from dialogue_kt.prompting import get_true_false_tokens
@@ -136,26 +138,47 @@ def test(args):
     else:
         return fn(args, get_default_fold(args))
 
-def compute_metrics(labels, preds):
+def compute_metrics(labels, preds, args):
     hard_preds = np.round(preds)
     acc = accuracy_score(labels, hard_preds)
-    auc = roc_auc_score(labels, preds)
-    prec, rec, f1, _ = precision_recall_fscore_support(labels, hard_preds, average="binary")
-    return acc * 100, auc * 100, prec * 100, rec * 100, f1 * 100
+    if args.dataset == "australia":
+        pearson_corr = pearsonr(labels, preds)[0]
+        metrics = (acc * 100, pearson_corr)
+        result_str = "Acc: {:.2f}, Pearson: {:.2f}\n".format(*metrics)
+    else:
+        auc = roc_auc_score(labels, preds)
+        prec, rec, f1, _ = precision_recall_fscore_support(labels, hard_preds, average="binary")
+        metrics = (acc * 100, auc * 100, prec * 100, rec * 100, f1 * 100)
+        result_str = "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*metrics)
+    return metrics, result_str
 
 def compute_all_metrics(loss, all_labels, all_preds, final_turn_labels, final_turn_preds, args, fold):
     result_str = f"Loss: {loss:.4f}\n"
     result_str += f"Overall ({len(all_labels)} samples):\n"
-    result_str += f"GT - True: {sum(all_labels)}, False: {len(all_labels) - sum(all_labels)}; "
-    result_str += f"Pred - True: {sum(np.round(all_preds))}, False: {len(all_preds) - sum(np.round(all_preds))}\n"
-    all_metrics = compute_metrics(all_labels, all_preds)
-    result_str += "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*all_metrics)
+    # Transform to discrete label space for Australia dataset
+    if args.dataset == "australia":
+        all_labels = [label * AUSTRALIA_MAX_SCORE for label in all_labels]
+        all_preds = [pred * AUSTRALIA_MAX_SCORE for pred in all_preds]
+        final_turn_labels = [label * AUSTRALIA_MAX_SCORE for label in final_turn_labels]
+        final_turn_preds = [pred * AUSTRALIA_MAX_SCORE for pred in final_turn_preds]
+    if args.dataset == "australia":
+        result_str += f"GT - {sorted(Counter(all_labels).items())}; "
+        result_str += f"Pred - {sorted(Counter(np.round(all_preds)).items())}\n"
+    else:
+        result_str += f"GT - True: {sum(all_labels)}, False: {len(all_labels) - sum(all_labels)}; "
+        result_str += f"Pred - True: {sum(np.round(all_preds))}, False: {len(all_preds) - sum(np.round(all_preds))}\n"
+    all_metrics, all_metrics_result_str = compute_metrics(all_labels, all_preds, args)
+    result_str += all_metrics_result_str
     if final_turn_labels is not None:
         result_str += f"Final Turn ({len(final_turn_labels)} samples):\n"
-        result_str += f"GT - True: {sum(final_turn_labels)}, False: {len(final_turn_labels) - sum(final_turn_labels)}; "
-        result_str += f"Pred - True: {sum(np.round(final_turn_preds))}, False: {len(final_turn_preds) - sum(np.round(final_turn_preds))}\n"
-        final_metrics = compute_metrics(final_turn_labels, final_turn_preds)
-        result_str += "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*final_metrics)
+        if args.dataset == "australia":
+            result_str += f"GT - {sorted(Counter(final_turn_labels).items())}; "
+            result_str += f"Pred - {sorted(Counter(np.round(final_turn_preds)).items())}\n"
+        else:
+            result_str += f"GT - True: {sum(final_turn_labels)}, False: {len(final_turn_labels) - sum(final_turn_labels)}; "
+            result_str += f"Pred - True: {sum(np.round(final_turn_preds))}, False: {len(final_turn_preds) - sum(np.round(final_turn_preds))}\n"
+        final_metrics, final_metrics_result_str = compute_metrics(final_turn_labels, final_turn_preds, args)
+        result_str += final_metrics_result_str
     else:
         final_metrics = []
     print(result_str)
@@ -421,7 +444,7 @@ def get_baseline_loss(y: torch.Tensor, batch, args):
     # Compute BCE loss
     labels_flat = batch["labels"][:, 1:].contiguous().view(-1)
     loss_mask = labels_flat != -100
-    labels_flat = labels_flat[loss_mask].type(torch.float)
+    labels_flat = labels_flat[loss_mask]
     corr_probs_flat = corr_probs.view(-1)[loss_mask]
     loss: torch.Tensor = torch.nn.BCELoss()(corr_probs_flat, labels_flat)
     return loss, corr_probs

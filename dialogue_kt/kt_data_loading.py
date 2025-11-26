@@ -265,10 +265,10 @@ class DKTCollator:
 
     def __call__(self, batch):
         labels = pad_sequence(
-            [torch.LongTensor(seq["labels"]) for seq in batch],
+            [torch.Tensor(seq["labels"]) for seq in batch],
             batch_first=True, padding_value=-100 # Pad with -100 to ignore loss on padding regions
         )
-        # # Fill in KC ids, 2D matrix (length x max num KCs) per sequence
+        # Fill in KC ids, 2D matrix (length x max num KCs) per sequence
         num_kcs = pad_sequence(
             [torch.LongTensor([len(kc_ids) for kc_ids in seq["kc_ids"]]) for seq in batch],
             batch_first=True, padding_value=1 # Pad with 1 to avoid division by 0

@@ -29,6 +29,9 @@ def get_mathdial_context(sample: dict):
             f"[BEGIN CORRECT SOLUTION]\n{sample['meta_data']['correct_solution'].strip()}\n[END CORRECT SOLUTION]\n\n"
             f"[BEGIN INCORRECT STUDENT SOLUTION]\n{sample['meta_data']['incorrect_solution'].strip()}\n[END INCORRECT STUDENT SOLUTION]")
 
+def get_australia_context(sample: dict):
+    return f"[BEGIN PROBLEM]\n{sample['meta_data']['question'].strip()}\n[END PROBLEM]"
+
 def get_true_false_tokens(tokenizer: AutoTokenizer):
     true = tokenizer("True").input_ids[-1]
     false = tokenizer("False").input_ids[-1]
@@ -39,6 +42,7 @@ def get_true_false_tokens(tokenizer: AutoTokenizer):
 
 COMTA_DIALOGUE_DESC = "the student is learning about math concepts."
 MATHDIAL_DIALOGUE_DESC = "the student is attempting to solve a math problem. You are also given this problem, its correct solution, and the incorrect solution the student initially gave."
+AUSTRALIA_DIALOGUE_DESC = "the student is learning about machine learning concepts."
 
 ANNO_BASE_SYSTEM_PROMPT = """You are an experienced math teacher and education expert. You are given a dialogue between a student and teacher where {desc} Your job is to list the math concepts/skills that can be used to classify the learning objectives at each turn in this dialogue. Please follow these instructions carefully when making your prediction:
 - Each math concept/skill should be short description of a single learning objective. They should be generic enough so that they can be applied across dialogues and educational settings.
@@ -82,6 +86,8 @@ def get_dataset_desc(args):
         return COMTA_DIALOGUE_DESC
     if args.dataset == "mathdial":
         return MATHDIAL_DIALOGUE_DESC
+    if args.dataset == "australia":
+        return AUSTRALIA_DIALOGUE_DESC
     raise Exception(f"No dataset description defined for {args.dataset}")
 
 def anno_base_system_prompt(args):
@@ -91,6 +97,8 @@ def anno_base_user_prompt(sample: dict, args):
     prompt = ""
     if args.dataset == "mathdial":
         prompt += get_mathdial_context(sample) + "\n\n"
+    elif args.dataset == "australia":
+        prompt += get_australia_context(sample) + "\n\n"
     prompt += get_dialogue_text(sample["dialogue"])
     max_turn = sample["dialogue"][-1]["turn"]
     prompt += f"\n\nYour final response should have an entry for exactly {max_turn} turn{f's (1-{max_turn})' if max_turn > 1 else ''}."
@@ -109,6 +117,8 @@ def anno_atc_user_prompt(sample: dict, level: str, options: List[str], args):
     prompt = ""
     if args.dataset == "mathdial":
         prompt += get_mathdial_context(sample) + "\n\n"
+    elif args.dataset == "australia":
+        prompt += get_australia_context(sample) + "\n\n"
     prompt += get_dialogue_text(sample["dialogue"])
     desc = "DOMAINS" if level == "domain" else "MATH CONCEPTS/SKILLS" if level == "cluster" else "STANDARDS"
     prompt += f"\n\n[BEGIN {desc}]\n- " + "\n- ".join(options) + f"\n[END {desc}]"
@@ -135,6 +145,8 @@ def kt_user_prompt(sample: dict, dialogue_anno: List[dict], turn_idx: int, kc: O
     prompt = ""
     if args.dataset == "mathdial":
         prompt += get_mathdial_context(sample) + "\n\n"
+    elif args.dataset == "australia":
+        prompt += get_australia_context(sample) + "\n\n"
     prompt += get_dialogue_text(dialogue_anno, turn_idx=turn_idx, include_labels=args.prompt_inc_labels)
     prompt += f"\n\nKnowledge Component:"
     if kc:

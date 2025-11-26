@@ -5,6 +5,8 @@ from ast import literal_eval
 import pandas as pd
 
 COMTA_SUBJECTS = ["Elementary", "Algebra", "Trigonometry", "Geometry"]
+AUSTRALIA_MAX_SCORE = 4
+AUSTRALIA_NUM_KCS = 5
 
 def add_content(cur: str, new: str):
     new = new.strip()
@@ -40,9 +42,11 @@ def process_dialogue(turns: List[dict]):
     return result
 
 def correct_from_str(correct: str):
-    return True if correct == "true" else False if correct == "false" else None
+    return True if correct == "true" else False if correct == "false" else None if correct == "na" else float(correct)
 
-def correct_to_str(correct: Union[bool, None]):
+def correct_to_str(correct: Union[float, bool, None]):
+    if isinstance(correct, float):
+        return f"{correct:.2f}"
     return "na" if correct is None else "true" if correct else False
 
 def standards_to_str(standards: List[str], sep: str):
@@ -111,6 +115,8 @@ def get_kc_dict_filename(args):
     return f"data/annotated/kc_dict_{args.dataset}_{args.tag_src}.json"
 
 def load_kc_dict(args):
+    if args.dataset == "australia":
+        return {f"KC_{idx}": idx for idx in range(AUSTRALIA_NUM_KCS)}
     with open(get_kc_dict_filename(args)) as file:
         return json.load(file)
 
@@ -123,8 +129,9 @@ def get_default_fold(args):
         return None
 
 def load_annotated_data(args, fold: Union[int, str, None] = 1):
+    converters = {col: literal_eval for col in ["dialogue", "meta_data", "annotation"]}
     if args.dataset == "comta":
-        df = pd.read_csv(get_annotated_data_filename(args), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        df = pd.read_csv(get_annotated_data_filename(args), converters=converters)
         if args.split_by_subject:
             assert fold in COMTA_SUBJECTS
             subj_mask = df.apply(lambda row: row["meta_data"]["math_level"] == fold, axis=1)
@@ -150,16 +157,52 @@ def load_annotated_data(args, fold: Union[int, str, None] = 1):
             return (row["meta_data"]["self_typical_confusion"] >= args.typical_cutoff and
                     row["meta_data"]["self_typical_interactions"] >= args.typical_cutoff)
 
-        train_df = pd.read_csv(get_annotated_data_filename(args, "train"), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        train_df = pd.read_csv(get_annotated_data_filename(args, "train"), converters=converters)
         train_df = train_df.sample(frac=1, random_state=221)
         train_df = train_df[train_df.apply(pass_typical_threshold, axis=1)]
-        test_df = pd.read_csv(get_annotated_data_filename(args, "test"), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        test_df = pd.read_csv(get_annotated_data_filename(args, "test"), converters=converters)
         test_df = test_df[test_df.apply(pass_typical_threshold, axis=1)]
         return (
             train_df[:int(.8 * len(train_df))],
             train_df[int(.8 * len(train_df)):],
             test_df
         )
+    elif args.dataset == "australia":
+        # Load annotated data
+        # TODO: point to full dataset
+        df = pd.read_csv("data/annotated/Embeddings.Quiz4.csv", converters={"kc_names": literal_eval})
+        # Process into expected format
+        rows = []
+        # TODO: is user id unique for each dialogue or are there multiple dialogues per user?
+        for dia_idx, group in df.groupby("user_id"):
+            dialogue = []
+            annotation = {}
+            # TODO: turn_idx has a lot of gaps -- are some turns missing?
+            for turn_idx, (_, row) in enumerate(group.sort_values("turn_idx").iterrows()):
+                dialogue.append({
+                    "turn": turn_idx + 1,
+                    "teacher": row["tutor_message"],
+                    "student": row["student_message"]
+                })
+                annotation[f"turn {turn_idx + 1}"] = {
+                    "correct": correct_from_str(row["correctness_score"]),
+                    "kcs": row["kc_names"]
+                }
+            rows.append({
+                "index": dia_idx,
+                "dialogue": dialogue,
+                "meta_data": {"question": group.iloc[0]["question"]},
+                "annotation": annotation
+            })
+
+        df = pd.DataFrame(rows)
+        df = df.sample(frac=1, random_state=221)
+        return (
+            df[:int(len(df) * .65)],
+            df[int(len(df) * .65) : int(len(df) * .8)],
+            df[int(len(df) * .8):],
+        )
+
     raise Exception(f"Loading not supported for {args.dataset}")
 
 def get_model_file_suffix(args, fold = None):

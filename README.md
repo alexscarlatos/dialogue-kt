@@ -86,10 +86,12 @@ python -m dialogue_kt.main train --help
 To train on the Australia dataset:
 ```
 # LLMKT Model
-python -m dialogue_kt.main train --dataset australia --model_type lmkt --model_name lmkt_australia --base_model meta-llama/Llama-3.2-1B-Instruct
+python -m dialogue_kt.main train --dataset australia --model_type lmkt --model_name lmkt_1b_australia_f1 --fold 1 --base_model meta-llama/Llama-3.2-1B-Instruct
+python -m dialogue_kt.main train --dataset australia --model_type lmkt --model_name lmkt_1b_australia_f2 --fold 2 --base_model meta-llama/Llama-3.2-1B-Instruct
 
 # DKT Model
-python -m dialogue_kt.main train --dataset australia --model_type dkt --model_name dkt_australia
+python -m dialogue_kt.main train --dataset australia --model_type dkt --model_name dkt_australia_f1 --fold 1
+python -m dialogue_kt.main train --dataset australia --model_type dkt --model_name dkt_australia_f2 --fold 1
 ```
 
 ### Hyperparameter Sweep

@@ -43,6 +43,11 @@ export OPENAI_API_KEY=<your key here> # For automated annotation via OpenAI
 export CUBLAS_WORKSPACE_CONFIG=:4096:8 # For enabling deterministic operations
 ```
 
+### Fix Library Issues
+There are a few bugs in baseline libraries that may cause issues in certain environments.
+1. In `site-packages/pykt/models/qdkt.py`, remove line 2 (`from turtle import forward`).
+2. In `site-packages/pyBKT/models/Model.py`, on line 32, replace `1e8` with `int(1e8)`.
+
 ## Prepare Dialogues for KT (Run Annotation with OpenAI)
 This step is not necessary to reproduce our results because we release the annotated datasets, but is here for reference.
 
@@ -76,6 +81,17 @@ Check the `results` folder for metric summaries and turn-level predictions for a
 To see all training options, run:
 ```
 python -m dialogue_kt.main train --help
+```
+
+To train on the Australia dataset:
+```
+# LLMKT Model
+python -m dialogue_kt.main train --dataset australia --model_type lmkt --model_name lmkt_1b_australia_f1 --fold 1 --base_model meta-llama/Llama-3.2-1B-Instruct
+python -m dialogue_kt.main train --dataset australia --model_type lmkt --model_name lmkt_1b_australia_f2 --fold 2 --base_model meta-llama/Llama-3.2-1B-Instruct
+
+# DKT Model
+python -m dialogue_kt.main train --dataset australia --model_type dkt --model_name dkt_australia_f1 --fold 1
+python -m dialogue_kt.main train --dataset australia --model_type dkt --model_name dkt_australia_f2 --fold 1
 ```
 
 ### Hyperparameter Sweep

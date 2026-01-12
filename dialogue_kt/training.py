@@ -1,10 +1,12 @@
 import json
+from collections import Counter
 from tqdm import tqdm
 import torch
 import transformers
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, roc_auc_score, precision_recall_fscore_support, root_mean_squared_error
+from scipy.stats import pearsonr
 from pykt.models.dkt import DKT
 from pykt.models.akt import AKT
 from pykt.models.dkvmn import DKVMN
@@ -136,26 +138,37 @@ def test(args):
     else:
         return fn(args, get_default_fold(args))
 
-def compute_metrics(labels, preds):
-    hard_preds = np.round(preds)
-    acc = accuracy_score(labels, hard_preds)
-    auc = roc_auc_score(labels, preds)
-    prec, rec, f1, _ = precision_recall_fscore_support(labels, hard_preds, average="binary")
-    return acc * 100, auc * 100, prec * 100, rec * 100, f1 * 100
+def compute_metrics(labels, preds, args):
+    if args.dataset == "australia":
+        acc = np.mean(np.round(labels, 1) == np.round(preds, 1))
+        rmse = root_mean_squared_error(labels, preds)
+        pearson_corr = pearsonr(labels, preds)[0]
+        metrics = (acc, rmse, pearson_corr)
+        result_str = "Acc: {:.4f}, RMSE: {:.4f}, Pearson: {:.4f}\n".format(*metrics)
+    else:
+        hard_preds = np.round(preds)
+        acc = accuracy_score(labels, hard_preds)
+        auc = roc_auc_score(labels, preds)
+        prec, rec, f1, _ = precision_recall_fscore_support(labels, hard_preds, average="binary")
+        metrics = (acc * 100, auc * 100, prec * 100, rec * 100, f1 * 100)
+        result_str = "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*metrics)
+    return metrics, result_str
 
 def compute_all_metrics(loss, all_labels, all_preds, final_turn_labels, final_turn_preds, args, fold):
     result_str = f"Loss: {loss:.4f}\n"
     result_str += f"Overall ({len(all_labels)} samples):\n"
-    result_str += f"GT - True: {sum(all_labels)}, False: {len(all_labels) - sum(all_labels)}; "
-    result_str += f"Pred - True: {sum(np.round(all_preds))}, False: {len(all_preds) - sum(np.round(all_preds))}\n"
-    all_metrics = compute_metrics(all_labels, all_preds)
-    result_str += "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*all_metrics)
+    if args.dataset != "australia":
+        result_str += f"GT - True: {sum(all_labels)}, False: {len(all_labels) - sum(all_labels)}; "
+        result_str += f"Pred - True: {sum(np.round(all_preds))}, False: {len(all_preds) - sum(np.round(all_preds))}\n"
+    all_metrics, all_metrics_result_str = compute_metrics(all_labels, all_preds, args)
+    result_str += all_metrics_result_str
     if final_turn_labels is not None:
         result_str += f"Final Turn ({len(final_turn_labels)} samples):\n"
-        result_str += f"GT - True: {sum(final_turn_labels)}, False: {len(final_turn_labels) - sum(final_turn_labels)}; "
-        result_str += f"Pred - True: {sum(np.round(final_turn_preds))}, False: {len(final_turn_preds) - sum(np.round(final_turn_preds))}\n"
-        final_metrics = compute_metrics(final_turn_labels, final_turn_preds)
-        result_str += "Acc: {:.2f}, AUC: {:.2f}, Prec: {:.2f}, Rec: {:.2f}, F1: {:.2f}\n".format(*final_metrics)
+        if args.dataset != "australia":
+            result_str += f"GT - True: {sum(final_turn_labels)}, False: {len(final_turn_labels) - sum(final_turn_labels)}; "
+            result_str += f"Pred - True: {sum(np.round(final_turn_preds))}, False: {len(final_turn_preds) - sum(np.round(final_turn_preds))}\n"
+        final_metrics, final_metrics_result_str = compute_metrics(final_turn_labels, final_turn_preds, args)
+        result_str += final_metrics_result_str
     else:
         final_metrics = []
     print(result_str)
@@ -421,7 +434,7 @@ def get_baseline_loss(y: torch.Tensor, batch, args):
     # Compute BCE loss
     labels_flat = batch["labels"][:, 1:].contiguous().view(-1)
     loss_mask = labels_flat != -100
-    labels_flat = labels_flat[loss_mask].type(torch.float)
+    labels_flat = labels_flat[loss_mask]
     corr_probs_flat = corr_probs.view(-1)[loss_mask]
     loss: torch.Tensor = torch.nn.BCELoss()(corr_probs_flat, labels_flat)
     return loss, corr_probs

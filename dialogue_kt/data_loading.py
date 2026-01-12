@@ -1,4 +1,5 @@
 from typing import List, Union
+import os
 import json
 import re
 from ast import literal_eval
@@ -40,9 +41,11 @@ def process_dialogue(turns: List[dict]):
     return result
 
 def correct_from_str(correct: str):
-    return True if correct == "true" else False if correct == "false" else None
+    return True if correct == "true" else False if correct == "false" else None if correct == "na" else float(correct)
 
-def correct_to_str(correct: Union[bool, None]):
+def correct_to_str(correct: Union[float, bool, None]):
+    if isinstance(correct, float):
+        return f"{correct:.2f}"
     return "na" if correct is None else "true" if correct else False
 
 def standards_to_str(standards: List[str], sep: str):
@@ -111,7 +114,19 @@ def get_kc_dict_filename(args):
     return f"data/annotated/kc_dict_{args.dataset}_{args.tag_src}.json"
 
 def load_kc_dict(args):
-    with open(get_kc_dict_filename(args)) as file:
+    kc_dict_filename = get_kc_dict_filename(args)
+    if args.dataset == "australia" and not os.path.exists(kc_dict_filename):
+        kc_dict = {}
+        for split in ["Traindata.1", "Traindata.2", "Testdata.1"]:
+            df = pd.read_csv(f"data/annotated/{split}.csv", converters={"kc_names": literal_eval})
+            for _, row in df.iterrows():
+                for kc_name in row["kc_names"]:
+                    if kc_name not in kc_dict:
+                        kc_dict[kc_name] = len(kc_dict)
+        with open(kc_dict_filename, "w") as file:
+            json.dump(kc_dict, file)
+        return kc_dict
+    with open(kc_dict_filename) as file:
         return json.load(file)
 
 def get_default_fold(args):
@@ -119,12 +134,38 @@ def get_default_fold(args):
         if args.split_by_subject:
             return "Elementary"
         return 1
-    else:
-        return None
+    if args.dataset == "australia":
+        return args.fold if args.fold is not None else 1
+    return None
+
+def load_and_process_australia_data(filename: str):
+    df = pd.read_csv(filename, converters={"kc_names": literal_eval})
+    rows = []
+    for dia_idx, group in df.groupby("user_id"):
+        dialogue = []
+        annotation = {}
+        for turn_idx, (_, row) in enumerate(group.sort_values(["quiz_id", "turn"]).iterrows()):
+            dialogue.append({
+                "turn": turn_idx + 1,
+                "teacher": row["tutor_message"],
+                "student": row["student_message"]
+            })
+            annotation[f"turn {turn_idx + 1}"] = {
+                "correct": correct_from_str(row["correctness_score"]),
+                "kcs": row["kc_names"]
+            }
+        rows.append({
+            "index": dia_idx,
+            "dialogue": dialogue,
+            "meta_data": {"question": group.iloc[0]["question"]},
+            "annotation": annotation
+        })
+    return pd.DataFrame(rows)
 
 def load_annotated_data(args, fold: Union[int, str, None] = 1):
+    converters = {col: literal_eval for col in ["dialogue", "meta_data", "annotation"]}
     if args.dataset == "comta":
-        df = pd.read_csv(get_annotated_data_filename(args), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        df = pd.read_csv(get_annotated_data_filename(args), converters=converters)
         if args.split_by_subject:
             assert fold in COMTA_SUBJECTS
             subj_mask = df.apply(lambda row: row["meta_data"]["math_level"] == fold, axis=1)
@@ -150,14 +191,23 @@ def load_annotated_data(args, fold: Union[int, str, None] = 1):
             return (row["meta_data"]["self_typical_confusion"] >= args.typical_cutoff and
                     row["meta_data"]["self_typical_interactions"] >= args.typical_cutoff)
 
-        train_df = pd.read_csv(get_annotated_data_filename(args, "train"), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        train_df = pd.read_csv(get_annotated_data_filename(args, "train"), converters=converters)
         train_df = train_df.sample(frac=1, random_state=221)
         train_df = train_df[train_df.apply(pass_typical_threshold, axis=1)]
-        test_df = pd.read_csv(get_annotated_data_filename(args, "test"), converters={col: literal_eval for col in ["dialogue", "meta_data", "annotation"]})
+        test_df = pd.read_csv(get_annotated_data_filename(args, "test"), converters=converters)
         test_df = test_df[test_df.apply(pass_typical_threshold, axis=1)]
         return (
             train_df[:int(.8 * len(train_df))],
             train_df[int(.8 * len(train_df)):],
+            test_df
+        )
+    elif args.dataset == "australia":
+        train_df = load_and_process_australia_data(f"data/annotated/Traindata.{fold}.csv")
+        test_df = load_and_process_australia_data(f"data/annotated/Testdata.1.csv")
+        train_df = train_df.sample(frac=1, random_state=221)
+        return (
+            train_df[:int(len(train_df) * .8)],
+            train_df[int(len(train_df) * .8):],
             test_df
         )
     raise Exception(f"Loading not supported for {args.dataset}")
